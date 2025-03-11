@@ -20,6 +20,11 @@ pip install marker-pdf
 ```shell
 pip install marker-pdf[full]
 ```
+or for development mode:
+
+```shell
+pip install -e .[full]
+```
 
 ## Εγκατάσταση για Διαδραστική Εφαρμογή (Interactive App)
 
