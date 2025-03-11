@@ -702,10 +702,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
             st.error(f"Error saving image {img_name}: {str(e)}")
 
     with col2:
-        if output_format == "markdown":
-            text = markdown_insert_images(text, images)
-            st.markdown(text, unsafe_allow_html=True)
-        elif output_format == "json":
+        if output_format == "json":
             st.json(text)
         elif output_format == "html":
             st.html(text)
