@@ -34,16 +34,27 @@ class CustomUploadedFile:
 
 # Function to reset file selection
 def reset_file_selection():
+    # Set file_loaded to False
     st.session_state.file_loaded = False
+    
+    # Clear file-related variables
     st.session_state.in_file = None
-    if 'file_original_path' in st.session_state:
-        del st.session_state.file_original_path
-    if 'file_name' in st.session_state:
-        del st.session_state.file_name
-    if 'file_type' in st.session_state:
-        del st.session_state.file_type
-    if 'auto_open_dialog' in st.session_state:
-        del st.session_state.auto_open_dialog
+    
+    # Remove any other file-related keys
+    keys_to_remove = [
+        'file_original_path', 
+        'file_name', 
+        'file_type', 
+        'auto_open_dialog',
+        'last_selected_path',
+        'all_selected_paths'
+    ]
+    
+    for key in keys_to_remove:
+        if key in st.session_state:
+            del st.session_state[key]
+    
+    # Make sure run_marker is initialized to False
     st.session_state.run_marker = False
 
 # Function to store file in session state

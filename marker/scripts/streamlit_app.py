@@ -178,13 +178,51 @@ col1, col2 = st.columns([.5, .5])
 model_dict = load_models()
 cli_options = parse_args()
 
-# Initialize session state variables if they don't exist
+# Make sure file_loaded is initialized
 if 'file_loaded' not in st.session_state:
     st.session_state.file_loaded = False
-if 'in_file' not in st.session_state:
-    st.session_state.in_file = None
+
+# Make sure run_marker is initialized
 if 'run_marker' not in st.session_state:
     st.session_state.run_marker = False
+
+# Check if we need to reset everything based on URL parameter
+query_params = st.query_params
+if 'reset' in query_params and query_params['reset'] == 'true':
+    # Clear all session state
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    # Initialize essential variables
+    st.session_state.file_loaded = False
+    st.session_state.run_marker = False
+    # Set a flag to auto-open the file dialog
+    st.session_state.auto_open_dialog = True
+    # Remove the reset parameter from URL
+    del query_params['reset']
+    # No need to rerun here as the page will reload with the new URL
+
+# Initialize session state variables if they don't exist
+if 'in_file' not in st.session_state:
+    st.session_state.in_file = None
+
+# Add custom CSS for buttons
+st.markdown("""
+<style>
+div.stButton > button {
+    background-color: #2e3440;
+    color: #d8dee9;
+    border-radius: 5px;
+    border: none;
+    padding: 10px 15px;
+    font-weight: bold;
+    width: 100%;
+}
+div.stButton > button:hover {
+    background-color: #3b4252;
+    color: #e5e9f0;
+}
+</style>
+""", unsafe_allow_html=True)
 
 st.markdown("""
 # Marker Demo
@@ -194,152 +232,208 @@ This app will let you try marker, a PDF or image -> Markdown, HTML, JSON convert
 Find the project [here](https://github.com/VikParuchuri/marker).
 """)
 
-# Add a toggle for file upload method
-upload_method = st.sidebar.radio(
-    "Choose file upload method:",
-    ["Upload file", "Enter file path", "Native file dialog"],
-    index=2,  # Default to Native file dialog
-    key="upload_method"
-)
-
-# Clear auto_open_dialog when upload method changes
-if 'previous_upload_method' not in st.session_state:
-    st.session_state.previous_upload_method = upload_method
-elif st.session_state.previous_upload_method != upload_method:
-    if 'auto_open_dialog' in st.session_state:
-        del st.session_state.auto_open_dialog
-    st.session_state.previous_upload_method = upload_method
-
 in_file = None
 file_path = None
 
-# Add a prominent button to open file dialog in the main area
-if not st.session_state.file_loaded and upload_method == "Native file dialog":
-    st.markdown("### Select a file to convert")
-    st.markdown("Click the button below to open the file selection dialog:")
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("📂 Open File Dialog", key="main_area_file_dialog", use_container_width=True):
+# Define a function to open the file dialog
+def open_file_dialog():
+    # If a file is already loaded, reset the session state first
+    if st.session_state.file_loaded:
+        reset_file_selection()
+        
+    try:
+        # Try different approaches for file dialog
+        selected_path = None
+        
+        # For Windows, use PowerShell approach directly
+        if os.name == 'nt':
             try:
-                # For Windows, use PowerShell approach directly
-                if os.name == 'nt':
-                    import subprocess
-                    import tempfile
+                import subprocess
+                import tempfile
+                
+                # Create a temporary PowerShell script
+                ps_script = tempfile.NamedTemporaryFile(suffix='.ps1', delete=False)
+                ps_script.write(b'''
+                Add-Type -AssemblyName System.Windows.Forms
+                
+                # Create and configure the OpenFileDialog
+                $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+                $openFileDialog.Filter = "All Files (*.*)|*.*|PDF Files (*.pdf)|*.pdf|Image Files (*.png;*.jpg;*.jpeg;*.gif)|*.png;*.jpg;*.jpeg;*.gif"
+                $openFileDialog.FilterIndex = 1
+                $openFileDialog.Multiselect = $true
+                $openFileDialog.Title = "Select file(s) to convert"
+                $openFileDialog.RestoreDirectory = $true
+                
+                # Enable visual styles for better appearance
+                [System.Windows.Forms.Application]::EnableVisualStyles()
+                
+                # Create a form that will be the owner of the dialog
+                $form = New-Object System.Windows.Forms.Form
+                $form.TopMost = $true
+                $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+                $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+                $form.ShowInTaskbar = $false
+                $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+                $form.Size = New-Object System.Drawing.Size(0, 0)
+                $form.Opacity = 0
+                
+                # Show the form first (invisible)
+                $form.Show()
+                
+                # Force the form to be the foreground window but keep it invisible
+                $form.TopMost = $true
+                $form.Focus()
+                $form.BringToFront()
+                $form.Activate()
+                
+                # Add a small delay to ensure the form is active
+                Start-Sleep -Milliseconds 100
+                
+                # Show the dialog with the form as owner
+                $result = $openFileDialog.ShowDialog($form)
+                
+                # Close the form
+                $form.Close()
+                
+                # Return the selected file if OK was clicked
+                if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+                    $openFileDialog.FileNames
+                }
+                ''')
+                ps_script.close()
+                
+                # Run the PowerShell script with hidden window
+                result = subprocess.run(
+                    ['powershell', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ps_script.name],
+                    capture_output=True, text=True
+                )
+                
+                # Clean up the temporary file
+                os.unlink(ps_script.name)
+                
+                # Get the selected file paths
+                if result.stdout.strip():
+                    # Clean the output - remove any newlines, carriage returns, or other whitespace
+                    raw_output = result.stdout.strip()
                     
-                    # Create a temporary PowerShell script
-                    ps_script = tempfile.NamedTemporaryFile(suffix='.ps1', delete=False)
-                    ps_script.write(b'''
-                    Add-Type -AssemblyName System.Windows.Forms
-                    
-                    # Create and configure the OpenFileDialog
-                    $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-                    $openFileDialog.Filter = "All Files (*.*)|*.*|PDF Files (*.pdf)|*.pdf|Image Files (*.png;*.jpg;*.jpeg;*.gif)|*.png;*.jpg;*.jpeg;*.gif"
-                    $openFileDialog.FilterIndex = 1
-                    $openFileDialog.Multiselect = $true
-                    $openFileDialog.Title = "Select file(s) to convert"
-                    $openFileDialog.RestoreDirectory = $true
-                    
-                    # Enable visual styles for better appearance
-                    [System.Windows.Forms.Application]::EnableVisualStyles()
-                    
-                    # Create a form that will be the owner of the dialog
-                    $form = New-Object System.Windows.Forms.Form
-                    $form.TopMost = $true
-                    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-                    $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
-                    $form.ShowInTaskbar = $false
-                    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-                    $form.Size = New-Object System.Drawing.Size(0, 0)
-                    $form.Opacity = 0
-                    
-                    # Show the form first (invisible)
-                    $form.Show()
-                    
-                    # Force the form to be the foreground window but keep it invisible
-                    $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
-                    $form.TopMost = $true
-                    $form.Focus()
-                    $form.BringToFront()
-                    $form.Activate()
-                    
-                    # Show the dialog with the form as owner
-                    $result = $openFileDialog.ShowDialog($form)
-                    
-                    # Close the form
-                    $form.Close()
-                    
-                    # Return the selected file if OK was clicked
-                    if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
-                        $openFileDialog.FileNames
-                    }
-                    ''')
-                    ps_script.close()
-                    
-                    # Run the PowerShell script with hidden window
-                    result = subprocess.run(
-                        ['powershell', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ps_script.name],
-                        capture_output=True, text=True
-                    )
-                    
-                    # Clean up the temporary file
-                    os.unlink(ps_script.name)
-                    
-                    # Get the selected file paths
-                    if result.stdout.strip():
-                        # Clean the output - remove any newlines, carriage returns, or other whitespace
-                        raw_output = result.stdout.strip()
+                    # Split the output by lines to get multiple file paths
+                    file_paths = []
+                    for line in raw_output.splitlines():
+                        clean_path = line.strip().replace('\r', '').replace('\n', '')
                         
-                        # Split the output by lines to get multiple file paths
-                        file_paths = []
-                        for line in raw_output.splitlines():
-                            clean_path = line.strip().replace('\r', '').replace('\n', '')
-                            
-                            # Remove any "True" prefix that might be added by PowerShell
-                            if clean_path.startswith('True'):
-                                clean_path = clean_path[4:]  # Remove 'True' from the beginning
-                            
-                            if clean_path and os.path.exists(clean_path):
-                                file_paths.append(clean_path)
+                        # Remove any "True" prefix that might be added by PowerShell
+                        if clean_path.startswith('True'):
+                            clean_path = clean_path[4:]  # Remove 'True' from the beginning
                         
-                        if not file_paths:
-                            st.error("No valid files were selected.")
+                        if clean_path and os.path.exists(clean_path):
+                            file_paths.append(clean_path)
+                    
+                    if not file_paths:
+                        st.error("No valid files were selected.")
+                    else:
+                        # Process the first file for now (we'll add multi-file support later)
+                        selected_path = file_paths[0]
+                        
+                        # Verify the path exists
+                        if not os.path.exists(selected_path):
+                            st.error(f"Invalid path returned: '{selected_path}'")
                         else:
-                            # Process the first file for now (we'll add multi-file support later)
-                            selected_path = file_paths[0]
+                            # Read the file from the provided path
+                            with open(selected_path, "rb") as f:
+                                file_content = f.read()
                             
-                            # Verify the path exists
-                            if not os.path.exists(selected_path):
-                                st.error(f"Invalid path returned: '{selected_path}'")
+                            # Create a UploadedFile-like object
+                            file_name = os.path.basename(selected_path)
+                            file_type = "application/pdf" if selected_path.lower().endswith(".pdf") else "image/jpeg"
+                            
+                            in_file = CustomUploadedFile(file_name, file_type, file_content, selected_path)
+                            
+                            # Show information about selected files
+                            if len(file_paths) > 1:
+                                st.success(f"Selected {len(file_paths)} files. Processing: {file_name}")
+                                st.info(f"Note: Currently only processing the first file. The other {len(file_paths)-1} files will be available in a future update.")
                             else:
-                                # Read the file from the provided path
-                                with open(selected_path, "rb") as f:
-                                    file_content = f.read()
-                                
-                                # Create a UploadedFile-like object
-                                file_name = os.path.basename(selected_path)
-                                file_type = "application/pdf" if selected_path.lower().endswith(".pdf") else "image/jpeg"
-                                
-                                in_file = CustomUploadedFile(file_name, file_type, file_content, selected_path)
-                                
-                                # Show information about selected files
-                                if len(file_paths) > 1:
-                                    st.success(f"Selected {len(file_paths)} files. Processing: {file_name}")
-                                    st.info(f"Note: Currently only processing the first file. The other {len(file_paths)-1} files will be available in a future update.")
-                                else:
-                                    st.success(f"File loaded: {file_name} from {selected_path}")
-                                
-                                # Store the path for reuse
-                                st.session_state['last_selected_path'] = selected_path
-                                # Store all selected paths for future use
-                                st.session_state['all_selected_paths'] = file_paths
-                                reset_file_selection()  # Reset first to clear any previous file
-                                store_file_in_session(in_file)
-                                st.rerun()
-                else:
-                    st.error("Native file dialog is only supported on Windows.")
+                                st.success(f"File loaded: {file_name} from {selected_path}")
+                            
+                            # Store the path for reuse
+                            st.session_state['last_selected_path'] = selected_path
+                            # Store all selected paths for future use
+                            st.session_state['all_selected_paths'] = file_paths
+                            
+                            # We don't need to reset_file_selection() here since we already did it at the start of the function if needed
+                            store_file_in_session(in_file)
+                            
+                            # Immediately rerun the app to show the new file
+                            st.rerun()
             except Exception as e:
-                st.error(f"Error opening file dialog: {str(e)}")
+                st.error(f"Error with file dialog: {str(e)}")
+        # For non-Windows systems, try PyQt5 if available
+        else:
+            try:
+                from PyQt5.QtWidgets import QApplication, QFileDialog
+                import sys
+                
+                # Create a Qt application
+                app = QApplication.instance()
+                if not app:
+                    app = QApplication(sys.argv)
+                
+                # Show file dialog
+                file_dialog = QFileDialog()
+                file_dialog.setFileMode(QFileDialog.ExistingFiles)
+                file_dialog.setNameFilter("All Files (*);;PDF Files (*.pdf);;Image Files (*.png *.jpg *.jpeg *.gif)")
+                
+                if file_dialog.exec_():
+                    selected_paths = file_dialog.selectedFiles()
+            except ImportError:
+                st.error("PyQt5 not installed and not on Windows. File dialog not available.")
+                st.stop()
+    except Exception as e:
+        st.error(f"Error opening file dialog: {str(e)}")
+    
+    return False
+
+# Add a "Select files" button to the sidebar if no file is loaded
+if not st.session_state.file_loaded:
+    st.sidebar.markdown("### Select File")
+    if st.sidebar.button("Select files", key="sidebar_file_dialog", use_container_width=True):
+        # Directly open the file dialog without reloading the page
+        open_file_dialog()
+else:
+    # Add "Change File" section to the sidebar when a file is loaded
+    st.sidebar.markdown("---")
+    st.sidebar.write("### Change File")
+    
+    if st.sidebar.button("Select files", key="change_file", use_container_width=True):
+        # Directly open the file dialog without resetting the session state first
+        # This will allow selecting a new file with just one click
+        open_file_dialog()
+
+# Add a prominent message in the main area if no file is loaded
+if not st.session_state.file_loaded:
+    st.markdown("### Select a file to convert")
+    st.markdown("Use the 'Select files' button in the sidebar to open the file selection dialog.")
+    
+    # Display the last selected file if available
+    if 'last_selected_path' in st.session_state and st.session_state['last_selected_path']:
+        st.info(f"Last selected file: {st.session_state['last_selected_path']}")
+        
+        # Provide a button to reload the last file
+        if st.button("Reload last file"):
+            try:
+                selected_path = st.session_state['last_selected_path']
+                with open(selected_path, "rb") as f:
+                    file_content = f.read()
+                
+                file_name = os.path.basename(selected_path)
+                file_type = "application/pdf" if selected_path.lower().endswith(".pdf") else "image/jpeg"
+                
+                in_file = CustomUploadedFile(file_name, file_type, file_content, selected_path)
+                st.success(f"File reloaded: {file_name}")
+                store_file_in_session(in_file)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error reloading file: {str(e)}")
 
 # Use the file from session state if available
 if in_file is None and st.session_state.file_loaded:
@@ -389,26 +483,6 @@ save_location = st.sidebar.radio(
     index=0
 )
 
-# Add buttons to select a different file
-st.sidebar.markdown("---")
-st.sidebar.write("### Change File")
-
-col_a, col_b = st.sidebar.columns(2)
-with col_a:
-    if st.button("Select different file", key="change_file"):
-        # Clear all session state related to file
-        reset_file_selection()
-        # Force a complete rerun to go back to the initial state
-        st.session_state.clear()
-        st.rerun()
-
-with col_b:
-    if st.button("Open file dialog", key="change_file_dialog"):
-        # Set a flag to open the file dialog on the next rerun
-        reset_file_selection()
-        st.session_state.auto_open_dialog = True
-        st.rerun()
-
 # Custom location input
 if save_location == "Custom location":
     custom_path = st.sidebar.text_input("Enter folder path:", value="")
@@ -430,6 +504,9 @@ strip_existing_ocr = st.sidebar.checkbox("Strip existing OCR", help="Strip exist
 debug = st.sidebar.checkbox("Debug", help="Show debug information", value=False)
 
 # Check if we should run the marker
+if 'run_marker' not in st.session_state:
+    st.session_state.run_marker = False
+    
 if not st.session_state.run_marker:
     st.stop()
 
@@ -660,8 +737,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
                 reset_file_selection()
                 # Force a complete rerun to go back to the initial state
                 for key in list(st.session_state.keys()):
-                    if key not in ['upload_method', 'previous_upload_method']:
-                        del st.session_state[key]
+                    del st.session_state[key]
                 st.rerun()
         
         with col_b:
@@ -692,7 +768,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
                         $form = New-Object System.Windows.Forms.Form
                         $form.TopMost = $true
                         $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-                        $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+                        $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
                         $form.ShowInTaskbar = $false
                         $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
                         $form.Size = New-Object System.Drawing.Size(0, 0)
@@ -702,11 +778,13 @@ with tempfile.TemporaryDirectory() as tmp_dir:
                         $form.Show()
                         
                         # Force the form to be the foreground window but keep it invisible
-                        $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
                         $form.TopMost = $true
                         $form.Focus()
                         $form.BringToFront()
                         $form.Activate()
+                        
+                        # Add a small delay to ensure the form is active
+                        Start-Sleep -Milliseconds 100
                         
                         # Show the dialog with the form as owner
                         $result = $openFileDialog.ShowDialog($form)
@@ -778,8 +856,11 @@ with tempfile.TemporaryDirectory() as tmp_dir:
                                     st.session_state['last_selected_path'] = selected_path
                                     # Store all selected paths for future use
                                     st.session_state['all_selected_paths'] = file_paths
-                                    reset_file_selection()  # Reset first to clear any previous file
+                                    
+                                    # We don't need to reset_file_selection() here since we already did it at the start of the function if needed
                                     store_file_in_session(in_file)
+                                    
+                                    # Immediately rerun the app to show the new file
                                     st.rerun()
                 except Exception as e:
                     st.error(f"Error opening file dialog: {str(e)}")
@@ -804,359 +885,19 @@ with tempfile.TemporaryDirectory() as tmp_dir:
             st.code(text, language=output_format)
 
 if not st.session_state.file_loaded:
-    if upload_method == "Upload file":
+    if upload_method == "Native file dialog":
         uploaded_file = st.sidebar.file_uploader("PDF, document, or image file:", type=["pdf", "png", "jpg", "jpeg", "gif", "pptx", "docx", "xlsx", "html", "epub"])
         if uploaded_file is not None:
             in_file = uploaded_file
             store_file_in_session(in_file)
             st.rerun()
-    elif upload_method == "Enter file path":
-        file_path = st.sidebar.text_input("Enter full path to file:", value="")
-        if file_path and os.path.exists(file_path):
-            # Read the file from the provided path
-            try:
-                with open(file_path, "rb") as f:
-                    file_content = f.read()
-                    
-                # Create a UploadedFile-like object
-                file_name = os.path.basename(file_path)
-                file_type = "application/pdf" if file_path.lower().endswith(".pdf") else "image/jpeg"
-                
-                in_file = CustomUploadedFile(file_name, file_type, file_content, file_path)
-                st.sidebar.success(f"File loaded: {file_name}")
-                store_file_in_session(in_file)
-                st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"Error loading file: {str(e)}")
-        elif file_path:
-            st.sidebar.error(f"File not found: {file_path}")
-        else:  # Native file dialog
-            # Define a function to open the file dialog
-            def open_file_dialog():
-                try:
-                    # Try different approaches for file dialog
-                    selected_path = None
-                    
-                    # For Windows, use PowerShell approach directly
-                    if os.name == 'nt':
-                        try:
-                            import subprocess
-                            import tempfile
-                            
-                            # Create a temporary PowerShell script
-                            ps_script = tempfile.NamedTemporaryFile(suffix='.ps1', delete=False)
-                            ps_script.write(b'''
-                            Add-Type -AssemblyName System.Windows.Forms
-                            
-                            # Create and configure the OpenFileDialog
-                            $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-                            $openFileDialog.Filter = "All Files (*.*)|*.*|PDF Files (*.pdf)|*.pdf|Image Files (*.png;*.jpg;*.jpeg;*.gif)|*.png;*.jpg;*.jpeg;*.gif"
-                            $openFileDialog.FilterIndex = 1
-                            $openFileDialog.Multiselect = $true
-                            $openFileDialog.Title = "Select file(s) to convert"
-                            $openFileDialog.RestoreDirectory = $true
-                            
-                            # Enable visual styles for better appearance
-                            [System.Windows.Forms.Application]::EnableVisualStyles()
-                            
-                            # Create a form that will be the owner of the dialog
-                            $form = New-Object System.Windows.Forms.Form
-                            $form.TopMost = $true
-                            $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-                            $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
-                            $form.ShowInTaskbar = $false
-                            $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-                            $form.Size = New-Object System.Drawing.Size(0, 0)
-                            $form.Opacity = 0
-                            
-                            # Show the form first (invisible)
-                            $form.Show()
-                            
-                            # Force the form to be the foreground window but keep it invisible
-                            $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
-                            $form.TopMost = $true
-                            $form.Focus()
-                            $form.BringToFront()
-                            $form.Activate()
-                            
-                            # Show the dialog with the form as owner
-                            $result = $openFileDialog.ShowDialog($form)
-                            
-                            # Close the form
-                            $form.Close()
-                            
-                            # Return the selected file if OK was clicked
-                            if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
-                                $openFileDialog.FileNames
-                            }
-                            ''')
-                            ps_script.close()
-                            
-                            # Run the PowerShell script with hidden window
-                            result = subprocess.run(
-                                ['powershell', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ps_script.name],
-                                capture_output=True, text=True
-                            )
-                            
-                            # Clean up the temporary file
-                            os.unlink(ps_script.name)
-                            
-                            # Get the selected file paths
-                            if result.stdout.strip():
-                                # Clean the output - remove any newlines, carriage returns, or other whitespace
-                                raw_output = result.stdout.strip()
-                                
-                                # Split the output by lines to get multiple file paths
-                                file_paths = []
-                                for line in raw_output.splitlines():
-                                    clean_path = line.strip().replace('\r', '').replace('\n', '')
-                                    
-                                    # Remove any "True" prefix that might be added by PowerShell
-                                    if clean_path.startswith('True'):
-                                        clean_path = clean_path[4:]  # Remove 'True' from the beginning
-                                    
-                                    if clean_path and os.path.exists(clean_path):
-                                        file_paths.append(clean_path)
-                                
-                                if not file_paths:
-                                    st.error("No valid files were selected.")
-                                else:
-                                    # Process the first file for now (we'll add multi-file support later)
-                                    selected_path = file_paths[0]
-                                    
-                                    # Verify the path exists
-                                    if not os.path.exists(selected_path):
-                                        st.error(f"Invalid path returned: '{selected_path}'")
-                                    else:
-                                        # Read the file from the provided path
-                                        with open(selected_path, "rb") as f:
-                                            file_content = f.read()
-                                        
-                                        # Create a UploadedFile-like object
-                                        file_name = os.path.basename(selected_path)
-                                        file_type = "application/pdf" if selected_path.lower().endswith(".pdf") else "image/jpeg"
-                                        
-                                        in_file = CustomUploadedFile(file_name, file_type, file_content, selected_path)
-                                        
-                                        # Show information about selected files
-                                        if len(file_paths) > 1:
-                                            st.success(f"Selected {len(file_paths)} files. Processing: {file_name}")
-                                            st.info(f"Note: Currently only processing the first file. The other {len(file_paths)-1} files will be available in a future update.")
-                                        else:
-                                            st.success(f"File loaded: {file_name} from {selected_path}")
-                                        
-                                        # Store the path for reuse
-                                        st.session_state['last_selected_path'] = selected_path
-                                        # Store all selected paths for future use
-                                        st.session_state['all_selected_paths'] = file_paths
-                                        reset_file_selection()  # Reset first to clear any previous file
-                                        store_file_in_session(in_file)
-                                        st.rerun()
-                        except Exception as e:
-                            st.error(f"Error with file dialog: {str(e)}")
-                    # For non-Windows systems, try PyQt5 if available
-                    else:
-                        try:
-                            from PyQt5.QtWidgets import QApplication, QFileDialog
-                            import sys
-                            
-                            # Create a Qt application
-                            app = QApplication.instance()
-                            if not app:
-                                app = QApplication(sys.argv)
-                            
-                            # Show file dialog
-                            file_dialog = QFileDialog()
-                            file_dialog.setFileMode(QFileDialog.ExistingFiles)
-                            file_dialog.setNameFilter("All Files (*);;PDF Files (*.pdf);;Image Files (*.png *.jpg *.jpeg *.gif)")
-                            
-                            if file_dialog.exec_():
-                                selected_paths = file_dialog.selectedFiles()
-                        except ImportError:
-                            st.sidebar.error("PyQt5 not installed and not on Windows. File dialog not available.")
-                            st.stop()
-                        
-                    # If no file was selected with any method
-                    if not selected_path:
-                        st.sidebar.warning("No file was selected. Please try again or use 'Enter file path' method instead.")
-                        st.stop()
-                    
-                    # Process the selected file
-                    if selected_path:
-                        # Read the file from the provided path
-                        with open(selected_path, "rb") as f:
-                            file_content = f.read()
-                        
-                        # Create a UploadedFile-like object
-                        file_name = os.path.basename(selected_path)
-                        file_type = "application/pdf" if selected_path.lower().endswith(".pdf") else "image/jpeg"
-                        
-                        in_file = CustomUploadedFile(file_name, file_type, file_content, selected_path)
-                        st.success(f"File loaded: {file_name} from {selected_path}")
-                        
-                        # Store the path for reuse
-                        st.session_state['last_selected_path'] = selected_path
-                        reset_file_selection()  # Reset first to clear any previous file
-                        store_file_in_session(in_file)
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error opening file dialog: {str(e)}")
-                st.sidebar.info("If you're running this in a server environment, the file dialog may not work. Try using 'Enter file path' instead.")
-            
-            # Use a button to trigger the file dialog
-            st.sidebar.button("Open file dialog", key="sidebar_file_dialog", on_click=open_file_dialog)
-            
-            # Also add a button in the main area for better visibility
-            st.button("Open file dialog", key="main_file_dialog", on_click=open_file_dialog)
-            
-            # Display the last selected file if available
-            if 'last_selected_path' in st.session_state and st.session_state['last_selected_path']:
-                st.sidebar.info(f"Last selected file: {st.session_state['last_selected_path']}")
-                
-                # Provide a button to reload the last file
-                if st.sidebar.button("Reload last file"):
-                    try:
-                        selected_path = st.session_state['last_selected_path']
-                        with open(selected_path, "rb") as f:
-                            file_content = f.read()
-                        
-                        file_name = os.path.basename(selected_path)
-                        file_type = "application/pdf" if selected_path.lower().endswith(".pdf") else "image/jpeg"
-                        
-                        in_file = CustomUploadedFile(file_name, file_type, file_content, selected_path)
-                        st.sidebar.success(f"File reloaded: {file_name}")
-                        store_file_in_session(in_file)
-                        st.rerun()
-                    except Exception as e:
-                        st.sidebar.error(f"Error reloading file: {str(e)}")
 
     # Auto-open file dialog when Native file dialog is selected and no file is loaded
-    if (not st.session_state.file_loaded and upload_method == "Native file dialog" and 
-        ('auto_open_dialog' in st.session_state or 
-         ('auto_open_dialog' not in st.session_state and st.session_state.get('previous_upload_method') == "Native file dialog"))):
+    if (not st.session_state.file_loaded and 
+        'auto_open_dialog' in st.session_state):
         
-        # Set the flag to avoid repeated dialog opening
-        st.session_state.auto_open_dialog = True
+        # Clear the flag to avoid repeated dialog opening
+        del st.session_state.auto_open_dialog
         
-        try:
-            # For Windows, use PowerShell approach directly
-            if os.name == 'nt':
-                import subprocess
-                import tempfile
-                
-                # Create a temporary PowerShell script
-                ps_script = tempfile.NamedTemporaryFile(suffix='.ps1', delete=False)
-                ps_script.write(b'''
-                Add-Type -AssemblyName System.Windows.Forms
-                
-                # Create and configure the OpenFileDialog
-                $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-                $openFileDialog.Filter = "All Files (*.*)|*.*|PDF Files (*.pdf)|*.pdf|Image Files (*.png;*.jpg;*.jpeg;*.gif)|*.png;*.jpg;*.jpeg;*.gif"
-                $openFileDialog.FilterIndex = 1
-                $openFileDialog.Multiselect = $true
-                $openFileDialog.Title = "Select file(s) to convert"
-                $openFileDialog.RestoreDirectory = $true
-                
-                # Enable visual styles for better appearance
-                [System.Windows.Forms.Application]::EnableVisualStyles()
-                
-                # Create a form that will be the owner of the dialog
-                $form = New-Object System.Windows.Forms.Form
-                $form.TopMost = $true
-                $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-                $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
-                $form.ShowInTaskbar = $false
-                $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-                $form.Size = New-Object System.Drawing.Size(0, 0)
-                $form.Opacity = 0
-                
-                # Show the form first (invisible)
-                $form.Show()
-                
-                # Force the form to be the foreground window but keep it invisible
-                $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
-                $form.TopMost = $true
-                $form.Focus()
-                $form.BringToFront()
-                $form.Activate()
-                
-                # Show the dialog with the form as owner
-                $result = $openFileDialog.ShowDialog($form)
-                
-                # Close the form
-                $form.Close()
-                
-                # Return the selected file if OK was clicked
-                if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
-                    $openFileDialog.FileNames
-                }
-                ''')
-                ps_script.close()
-                
-                # Run the PowerShell script with hidden window
-                result = subprocess.run(
-                    ['powershell', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ps_script.name],
-                    capture_output=True, text=True
-                )
-                
-                # Clean up the temporary file
-                os.unlink(ps_script.name)
-                
-                # Get the selected file paths
-                if result.stdout.strip():
-                    # Clean the output - remove any newlines, carriage returns, or other whitespace
-                    raw_output = result.stdout.strip()
-                    
-                    # Split the output by lines to get multiple file paths
-                    file_paths = []
-                    for line in raw_output.splitlines():
-                        clean_path = line.strip().replace('\r', '').replace('\n', '')
-                        
-                        # Remove any "True" prefix that might be added by PowerShell
-                        if clean_path.startswith('True'):
-                            clean_path = clean_path[4:]  # Remove 'True' from the beginning
-                        
-                        if clean_path and os.path.exists(clean_path):
-                            file_paths.append(clean_path)
-                    
-                    if not file_paths:
-                        st.error("No valid files were selected.")
-                    else:
-                        # Process the first file for now (we'll add multi-file support later)
-                        selected_path = file_paths[0]
-                        
-                        # Verify the path exists
-                        if not os.path.exists(selected_path):
-                            st.error(f"Invalid path returned: '{selected_path}'")
-                        else:
-                            # Read the file from the provided path
-                            with open(selected_path, "rb") as f:
-                                file_content = f.read()
-                            
-                            # Create a UploadedFile-like object
-                            file_name = os.path.basename(selected_path)
-                            file_type = "application/pdf" if selected_path.lower().endswith(".pdf") else "image/jpeg"
-                            
-                            in_file = CustomUploadedFile(file_name, file_type, file_content, selected_path)
-                            
-                            # Show information about selected files
-                            if len(file_paths) > 1:
-                                st.success(f"Selected {len(file_paths)} files. Processing: {file_name}")
-                                st.info(f"Note: Currently only processing the first file. The other {len(file_paths)-1} files will be available in a future update.")
-                            else:
-                                st.success(f"File loaded: {file_name} from {selected_path}")
-                            
-                            # Store the path for reuse
-                            st.session_state['last_selected_path'] = selected_path
-                            # Store all selected paths for future use
-                            st.session_state['all_selected_paths'] = file_paths
-                            reset_file_selection()  # Reset first to clear any previous file
-                            store_file_in_session(in_file)
-                            st.rerun()
-                else:
-                    st.error("No valid files were selected.")
-            else:
-                st.error("Native file dialog is only supported on Windows.")
-        except Exception as e:
-            st.error(f"Error opening file dialog: {str(e)}")
-            st.sidebar.info("If you're running this in a server environment, the file dialog may not work. Try using 'Enter file path' instead.")
+        # Open the file dialog
+        open_file_dialog()
